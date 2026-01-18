@@ -1,0 +1,9 @@
+{
+  "id": "migrations",
+  "name": "Migrations",
+  "version": "1.0.0",
+  "minAppVersion": "1.0.0",
+  "description": "Mass text migration tool - find and replace across your entire vault with regex support and diff preview",
+  "author": "ccmdi",
+  "isDesktopOnly": false
+}

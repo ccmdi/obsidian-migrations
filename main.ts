@@ -345,7 +345,7 @@ class MigrationModal extends Modal {
     // Submit button
     const buttonContainer = contentEl.createDiv("migrations-buttons");
     this.submitBtn = buttonContainer.createEl("button", {
-      text: "Apply Changes",
+      text: "Apply changes",
       cls: "mod-cta migrations-submit",
     });
     this.submitBtn.disabled = true;
@@ -900,7 +900,7 @@ class ConfirmModal extends Modal {
     const buttonContainer = contentEl.createDiv("migrations-confirm-buttons");
 
     const confirmBtn = buttonContainer.createEl("button", {
-      text: "Apply Changes",
+      text: "Apply changes",
       cls: "mod-warning",
     });
     confirmBtn.addEventListener("click", () => {

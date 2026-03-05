@@ -202,6 +202,33 @@ class TrigramIndex {
     };
   }
 
+  addFileWithTrigrams(path: string, trigrams: Set<string>): void {
+    this.removeFile(path);
+    this.fileToTrigrams.set(path, trigrams);
+    for (const trigram of trigrams) {
+      if (!this.index.has(trigram)) {
+        this.index.set(trigram, new Set());
+      }
+      this.index.get(trigram)!.add(path);
+    }
+  }
+
+  getFileTrigrams(path: string): Set<string> | undefined {
+    return this.fileToTrigrams.get(path);
+  }
+
+  static packTrigrams(trigrams: Set<string>): string {
+    return [...trigrams].join("");
+  }
+
+  static unpackTrigrams(packed: string): Set<string> {
+    const trigrams = new Set<string>();
+    for (let i = 0; i <= packed.length - 3; i += 3) {
+      trigrams.add(packed.substring(i, i + 3));
+    }
+    return trigrams;
+  }
+
   clear(): void {
     this.index.clear();
     this.fileToTrigrams.clear();
@@ -344,6 +371,13 @@ class MigrationModal extends Modal {
     }
 
     const generation = ++this.searchGeneration;
+
+    if (this.plugin.settings.useTrigramIndex && !this.plugin.isIndexReady()) {
+      this.statsEl.setText("Building search index...");
+      await this.plugin.ensureIndex();
+      if (generation !== this.searchGeneration) return;
+    }
+
     this.statsEl.setText("Searching...");
 
     try {
@@ -892,6 +926,7 @@ export default class MigrationsPlugin extends Plugin {
   settings: MigrationsSettings;
   trigramIndex: TrigramIndex = new TrigramIndex();
   private indexReady = false;
+  private indexPromise: Promise<void> | null = null;
 
   async onload() {
     await this.loadSettings();
@@ -906,37 +941,93 @@ export default class MigrationsPlugin extends Plugin {
 
     this.addSettingTab(new MigrationsSettingTab(this.app, this));
 
-    // Build trigram index
     if (this.settings.useTrigramIndex) {
-      this.app.workspace.onLayoutReady(() => this.buildIndex());
       this.registerVaultEvents();
     }
+  }
+
+  async ensureIndex(): Promise<void> {
+    if (this.indexReady) return;
+    if (!this.indexPromise) {
+      this.indexPromise = this.buildIndex();
+    }
+    return this.indexPromise;
   }
 
   private async buildIndex() {
     const startTime = performance.now();
     const files = this.app.vault.getMarkdownFiles();
     let errorCount = 0;
+    let cacheHits = 0;
 
-    for (const file of files) {
-      try {
-        const content = await this.app.vault.cachedRead(file);
-        this.trigramIndex.addFile(file.path, content);
-      } catch (e) {
-        errorCount++;
-        debug(`Migrations: Failed to index ${file.path}:`, e);
+    const cache = await this.loadTrigramCache();
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const cached = cache?.[file.path];
+
+      if (cached && cached[0] === file.stat.mtime) {
+        const trigrams = TrigramIndex.unpackTrigrams(cached[1]);
+        this.trigramIndex.addFileWithTrigrams(file.path, trigrams);
+        cacheHits++;
+      } else {
+        try {
+          const content = await this.app.vault.cachedRead(file);
+          this.trigramIndex.addFile(file.path, content);
+        } catch (e) {
+          errorCount++;
+          debug(`Migrations: Failed to index ${file.path}:`, e);
+        }
+      }
+
+      if (i % 50 === 49) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
       }
     }
 
     this.indexReady = true;
+    await this.saveTrigramCache(files);
+
     const elapsed = (performance.now() - startTime).toFixed(1);
     const stats = this.trigramIndex.getStats();
-    debug(`Migrations: Indexed ${stats.fileCount} files (${stats.trigramCount} trigrams) in ${elapsed}ms${errorCount > 0 ? `, ${errorCount} errors` : ""}`);
+    debug(`Migrations: Indexed ${stats.fileCount} files (${stats.trigramCount} trigrams) in ${elapsed}ms, ${cacheHits} cache hits${errorCount > 0 ? `, ${errorCount} errors` : ""}`);
+  }
+
+  private async loadTrigramCache(): Promise<Record<string, [number, string]> | null> {
+    try {
+      const raw = await this.app.vault.adapter.read(
+        `${this.manifest.dir}/trigram-cache.json`
+      );
+      const cache = JSON.parse(raw);
+      if (cache?.v !== 1) return null;
+      return cache.files;
+    } catch {
+      return null;
+    }
+  }
+
+  private async saveTrigramCache(files: TFile[]) {
+    try {
+      const entries: Record<string, [number, string]> = {};
+      for (const file of files) {
+        const trigrams = this.trigramIndex.getFileTrigrams(file.path);
+        if (trigrams) {
+          entries[file.path] = [file.stat.mtime, TrigramIndex.packTrigrams(trigrams)];
+        }
+      }
+      await this.app.vault.adapter.write(
+        `${this.manifest.dir}/trigram-cache.json`,
+        JSON.stringify({ v: 1, files: entries })
+      );
+    } catch (e) {
+      debug("Migrations: Failed to save trigram cache:", e);
+    }
   }
 
   private registerVaultEvents() {
     this.registerEvent(
       this.app.vault.on("modify", async (file) => {
+        if (!this.indexReady) return;
         if (isMarkdownFile(file)) {
           try {
             const content = await this.app.vault.cachedRead(file);
@@ -950,6 +1041,7 @@ export default class MigrationsPlugin extends Plugin {
 
     this.registerEvent(
       this.app.vault.on("create", async (file) => {
+        if (!this.indexReady) return;
         if (isMarkdownFile(file)) {
           try {
             const content = await this.app.vault.cachedRead(file);
@@ -963,6 +1055,7 @@ export default class MigrationsPlugin extends Plugin {
 
     this.registerEvent(
       this.app.vault.on("delete", (file) => {
+        if (!this.indexReady) return;
         if (isMarkdownFile(file)) {
           this.trigramIndex.removeFile(file.path);
         }
@@ -971,6 +1064,7 @@ export default class MigrationsPlugin extends Plugin {
 
     this.registerEvent(
       this.app.vault.on("rename", async (file, oldPath) => {
+        if (!this.indexReady) return;
         if (isMarkdownFile(file)) {
           this.trigramIndex.removeFile(oldPath);
           try {
@@ -1069,7 +1163,7 @@ class MigrationsSettingTab extends PluginSettingTab {
     const stats = this.plugin.trigramIndex.getStats();
     const indexDesc = this.plugin.isIndexReady()
       ? `Pre-filter files using trigram index for faster search. Currently indexing ${stats.fileCount} files (${stats.trigramCount} trigrams).`
-      : "Pre-filter files using trigram index for faster search. Requires plugin reload to take effect.";
+      : "Pre-filter files using trigram index for faster search. Index is built on first use.";
 
     new Setting(containerEl)
       .setName("Use trigram index")

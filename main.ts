@@ -219,7 +219,7 @@ class MigrationModal extends Modal {
   private previewEl: HTMLElement;
   private statsEl: HTMLElement;
   private submitBtn: HTMLButtonElement;
-  private isSearching = false;
+  private searchGeneration = 0;
   private renderedCount = 0;
   private loadMoreEl: HTMLElement | null = null;
   private observer: IntersectionObserver | null = null;
@@ -331,10 +331,11 @@ class MigrationModal extends Modal {
     cancelBtn.addEventListener("click", () => this.close());
   }
 
-  private debouncedSearch = debounce(() => this.performSearch(), 50, true);
+  private debouncedSearch = debounce(() => this.performSearch(), 300, true);
 
   private async performSearch() {
     if (!this.searchInput.trim()) {
+      this.searchGeneration++;
       this.statsEl.setText("Enter a search pattern to preview changes");
       this.previewEl.empty();
       this.matches = [];
@@ -342,8 +343,7 @@ class MigrationModal extends Modal {
       return;
     }
 
-    if (this.isSearching) return;
-    this.isSearching = true;
+    const generation = ++this.searchGeneration;
     this.statsEl.setText("Searching...");
 
     try {
@@ -351,7 +351,6 @@ class MigrationModal extends Modal {
       let replacementText: string;
 
       try {
-        // Build flags: g = global, i = case insensitive, s = dotall (multiline)
         let flags = "g";
         if (!this.caseSensitive) flags += "i";
         if (this.multiline) flags += "s";
@@ -360,28 +359,25 @@ class MigrationModal extends Modal {
           ? new RegExp(this.searchInput, flags)
           : new RegExp(this.escapeRegex(this.searchInput), flags);
 
-        // Process replacement text
         replacementText = this.processEscapeSequences(this.replaceInput);
         if (!this.useRegex) {
-          // Escape $ for non-regex users to prevent special pattern interpretation
           replacementText = this.escapeReplacement(replacementText);
         }
       } catch (e) {
+        if (generation !== this.searchGeneration) return;
         this.statsEl.setText(`Invalid regex: ${(e as Error).message}`);
         this.previewEl.empty();
         this.matches = [];
         this.submitBtn.disabled = true;
-        this.isSearching = false;
         return;
       }
 
       const searchStart = performance.now();
       let files = this.app.vault.getMarkdownFiles();
       const totalFiles = files.length;
-      this.matches = [];
+      const matches: MigrationMatch[] = [];
       let totalMatches = 0;
 
-      // Pre-filter using trigram index if available
       if (this.plugin.isIndexReady()) {
         const trigramStart = performance.now();
         const candidates = this.plugin.trigramIndex.getCandidates(this.searchInput, this.useRegex);
@@ -393,7 +389,10 @@ class MigrationModal extends Modal {
         debug(`Migrations: Trigram filter: ${totalFiles} → ${files.length} files in ${trigramTime}ms`);
       }
 
-      for (const file of files) {
+      for (let i = 0; i < files.length; i++) {
+        if (generation !== this.searchGeneration) return;
+
+        const file = files[i];
         let content: string;
         try {
           content = await this.app.vault.cachedRead(file);
@@ -423,15 +422,31 @@ class MigrationModal extends Modal {
         }
 
         totalMatches += matchCount;
-        const { added, removed } = this.calculateLineDiff(content, newContent);
-        this.matches.push({
+        matches.push({
           file,
           originalContent: content,
           newContent,
           matchCount,
-          linesAdded: added,
-          linesRemoved: removed,
+          linesAdded: 0,
+          linesRemoved: 0,
         });
+
+        if (i % 100 === 99) {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+      }
+
+      if (generation !== this.searchGeneration) return;
+
+      this.matches = matches;
+
+      // Compute diff stats lazily -- only when the setting is on
+      if (this.settings.showDiffStats) {
+        for (const match of this.matches) {
+          const { added, removed } = this.calculateLineDiff(match.originalContent, match.newContent);
+          match.linesAdded = added;
+          match.linesRemoved = removed;
+        }
       }
 
       const searchTime = (performance.now() - searchStart).toFixed(2);
@@ -440,8 +455,9 @@ class MigrationModal extends Modal {
       this.updateStats(totalMatches);
       this.renderPreview();
       this.submitBtn.disabled = this.matches.length === 0;
-    } finally {
-      this.isSearching = false;
+    } catch (e) {
+      if (generation !== this.searchGeneration) return;
+      this.statsEl.setText(`Search error: ${(e as Error).message}`);
     }
   }
 

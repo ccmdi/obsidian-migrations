@@ -1,10 +1,14 @@
 .migrations-modal {
   width: 35vw !important;
+  height: 70vh !important;
   overflow: hidden !important;
 }
 
 .migrations-modal .modal-content {
+  display: flex;
+  flex-direction: column;
   overflow: hidden !important;
+  height: 100%;
 }
 
 .migrations-input {
@@ -60,7 +64,8 @@
 }
 
 .migrations-preview {
-  max-height: 400px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   border: 1px solid var(--background-modifier-border);

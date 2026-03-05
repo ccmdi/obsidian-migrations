@@ -25,7 +25,7 @@ const DEFAULT_SETTINGS: MigrationsSettings = {
   patchFolder: "migrations-patches",
   showLineNumbers: true,
   showDiffStats: false,
-  useTrigramIndex: true,
+  useTrigramIndex: false,
 };
 
 interface MigrationMatch {
@@ -1160,14 +1160,31 @@ class MigrationsSettingTab extends PluginSettingTab {
 
     containerEl.createEl("h2", { text: "Performance" });
 
+    const fileCount = this.app.vault.getMarkdownFiles().length;
     const stats = this.plugin.trigramIndex.getStats();
-    const indexDesc = this.plugin.isIndexReady()
-      ? `Pre-filter files using trigram index for faster search. Currently indexing ${stats.fileCount} files (${stats.trigramCount} trigrams).`
-      : "Pre-filter files using trigram index for faster search. Index is built on first use.";
+
+    const descParts: string[] = [];
+    if (this.plugin.isIndexReady()) {
+      descParts.push(
+        `Indexing ${stats.fileCount} files (${stats.trigramCount} trigrams).`
+      );
+    }
+    descParts.push(
+      `Your vault has ${fileCount.toLocaleString()} markdown files.`
+    );
+    if (fileCount < 10_000) {
+      descParts.push(
+        "Not recommended for your vault size."
+      );
+    } else {
+      descParts.push(
+        "This is recommended for your vault size."
+      );
+    }
 
     new Setting(containerEl)
       .setName("Use trigram index")
-      .setDesc(indexDesc)
+      .setDesc(descParts.join(" "))
       .addToggle((toggle) =>
         toggle
           .setValue(this.plugin.settings.useTrigramIndex)

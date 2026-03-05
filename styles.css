@@ -13,12 +13,40 @@
 
 .migrations-options {
   display: flex;
-  gap: 20px;
+  flex-wrap: wrap;
+  gap: 8px 12px;
   margin-bottom: 16px;
+  align-items: center;
 }
 
 .migrations-options .setting-item {
-  border: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: none !important;
+  padding: 0 !important;
+  margin: 0;
+  flex: 0 0 auto;
+  width: auto !important;
+  min-width: 0;
+}
+
+.migrations-options .setting-item-info {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0;
+}
+
+.migrations-options .setting-item-info .setting-item-name {
+  font-size: 13px;
+  padding: 0;
+}
+
+.migrations-options .setting-item-description {
+  display: none;
+}
+
+.migrations-options .setting-item-control {
   padding: 0;
   flex: 0 0 auto;
 }
